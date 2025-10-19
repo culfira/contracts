@@ -26,8 +26,12 @@ describe("CulfiraToken", async function () {
 
   before(async function () {
     // Deploy contracts via Hardhat Ignition fixture
-    const { token, manager: mgr, vault, accounts } =
-      await deployCulfiraWithIgnition(viem, ignition);
+    const {
+      token,
+      manager: mgr,
+      vault,
+      accounts,
+    } = await deployCulfiraWithIgnition(viem, ignition);
     culToken = token;
     manager = mgr;
     vaultStokvel = vault;
@@ -35,7 +39,6 @@ describe("CulfiraToken", async function () {
     // Align test accounts with fixture accounts
     owner = accounts.owner;
     treasury = accounts.treasury;
-    ;
     [user1, user2, user3, user4, user5, user6, user7] = accounts.others;
 
     // Register the EOA owner as a vault for lock/unlock tests
@@ -54,7 +57,10 @@ describe("CulfiraToken", async function () {
     it("Should set correct owner", async function () {
       const tokenOwner = await culToken.read.owner();
       // Ownership was transferred to the manager in setup
-      assert.equal(tokenOwner.toLowerCase(), owner.account.address.toLowerCase());
+      assert.equal(
+        tokenOwner.toLowerCase(),
+        owner.account.address.toLowerCase()
+      );
     });
 
     it("Should set treasury address", async function () {
@@ -146,25 +152,38 @@ describe("CulfiraToken", async function () {
       await culToken.write.mint([user3.account.address, MIN_STAKE], {
         value: HBAR_BACKING,
       });
-      // Use EOA 'owner' which was registered as a vault in setup
+
+      const user3Token = await viem.getContractAt(
+        "CulfiraToken",
+        culToken.address,
+        { client: { wallet: user3 } }
+      );
+      await user3Token.write.approve([owner.account.address, MIN_STAKE]);
+
       const ownerAsVaultToken = await viem.getContractAt(
         "CulfiraToken",
         culToken.address,
         { client: { wallet: owner } }
       );
-      const lockHash1 = await ownerAsVaultToken.write.lock([
+      await ownerAsVaultToken.write.transferFrom([
         user3.account.address,
+        owner.account.address, // Transfer to vault (owner)
         MIN_STAKE,
       ]);
-      await publicClient.waitForTransactionReceipt({ hash: lockHash1 });
+
+      await ownerAsVaultToken.write.lock([user3.account.address, MIN_STAKE]);
 
       const locked = await culToken.read.lockedBalance([user3.account.address]);
       const available = await culToken.read.availableBalance([
         user3.account.address,
       ]);
+      const userBalance = await culToken.read.balanceOf([
+        user3.account.address,
+      ]);
 
-      assert.equal(locked, MIN_STAKE);
-      assert.equal(available, 0n);
+      assert.equal(locked, MIN_STAKE); // Staking tracked
+      assert.equal(userBalance, 0n); // User wallet empty
+      assert.equal(available, 0n); // Available = balanceOf = 0
     });
 
     it("Should revert if non-vault tries to lock", async function () {
@@ -172,57 +191,95 @@ describe("CulfiraToken", async function () {
         value: HBAR_BACKING,
       });
 
-      const user2Token = await viem.getContractAt(
+      const user4Token = await viem.getContractAt(
         "CulfiraToken",
         culToken.address,
-        {
-          client: { wallet: user4 },
-        }
+        { client: { wallet: user4 } }
       );
 
       await assert.rejects(
-        user2Token.write.lock([user4.account.address, MIN_STAKE])
+        user4Token.write.lock([user4.account.address, MIN_STAKE])
       );
     });
 
     it("Should unlock tokens by registered vault", async function () {
+      // 1. Mint và transfer tokens
       await culToken.write.mint([user6.account.address, MIN_STAKE], {
         value: HBAR_BACKING,
       });
+
+      const user6Token = await viem.getContractAt(
+        "CulfiraToken",
+        culToken.address,
+        { client: { wallet: user6 } }
+      );
+      await user6Token.write.approve([owner.account.address, MIN_STAKE]);
+
       const ownerAsVaultToken = await viem.getContractAt(
         "CulfiraToken",
         culToken.address,
         { client: { wallet: owner } }
       );
-      const lockHash2 = await ownerAsVaultToken.write.lock([
-        user6.account.address,
-        MIN_STAKE,
-      ]);
-      await publicClient.waitForTransactionReceipt({ hash: lockHash2 });
-      const unlockHash = await ownerAsVaultToken.write.unlock([
-        user6.account.address,
-        MIN_STAKE,
-      ]);
-      await publicClient.waitForTransactionReceipt({ hash: unlockHash });
 
+      // 2. Transfer to vault
+      await ownerAsVaultToken.write.transferFrom([
+        user6.account.address,
+        owner.account.address,
+        MIN_STAKE,
+      ]);
+
+      // 3. Lock
+      await ownerAsVaultToken.write.lock([user6.account.address, MIN_STAKE]);
+
+      // 4. Unlock
+      await ownerAsVaultToken.write.unlock([user6.account.address, MIN_STAKE]);
+
+      // 5. Transfer back to user
+      await ownerAsVaultToken.write.transfer([
+        user6.account.address,
+        MIN_STAKE,
+      ]);
+
+      // 6. Verify
       const locked = await culToken.read.lockedBalance([user6.account.address]);
       const available = await culToken.read.availableBalance([
         user6.account.address,
       ]);
+      const userBalance = await culToken.read.balanceOf([
+        user6.account.address,
+      ]);
 
       assert.equal(locked, 0n);
+      assert.equal(userBalance, MIN_STAKE);
       assert.equal(available, MIN_STAKE);
     });
 
     it("Should emit TokensLocked event", async function () {
+      // Setup: mint, approve, transfer
       await culToken.write.mint([user3.account.address, MIN_STAKE], {
         value: HBAR_BACKING,
       });
+
+      const user3Token = await viem.getContractAt(
+        "CulfiraToken",
+        culToken.address,
+        { client: { wallet: user3 } }
+      );
+      await user3Token.write.approve([owner.account.address, MIN_STAKE]);
+
       const ownerAsVaultToken = await viem.getContractAt(
         "CulfiraToken",
         culToken.address,
         { client: { wallet: owner } }
       );
+
+      await ownerAsVaultToken.write.transferFrom([
+        user3.account.address,
+        owner.account.address,
+        MIN_STAKE,
+      ]);
+
+      // Test event
       await viem.assertions.emitWithArgs(
         ownerAsVaultToken.write.lock([user3.account.address, MIN_STAKE]),
         culToken,
@@ -319,7 +376,7 @@ describe("CulfiraToken", async function () {
       const vaultBalance = await culToken.read.balanceOf([
         owner.account.address,
       ]);
-      assert.equal(vaultBalance, MIN_STAKE);
+      assert.equal(vaultBalance, MIN_STAKE * 3n);
     });
   });
 
