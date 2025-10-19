@@ -4,10 +4,17 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "./IBaseWrapper.sol";
 
 abstract contract BaseWrapper is IWrapper, Ownable {
-    address public underlyingToken;
+    string private _protocolName;
 
-    constructor(address _underlyingToken) {
-        underlyingToken = _underlyingToken;
-        _transferOwnership(msg.sender); // From Ownable
+    constructor(string memory name) Ownable(msg.sender) {
+        _protocolName = name;
+    }
+
+    function protocolName() external view override returns (string memory) {
+        return _protocolName;
+    }
+
+    function setProtocolName(string memory name) external override onlyOwner {
+        _protocolName = name;
     }
 }
