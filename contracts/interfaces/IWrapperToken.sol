@@ -1,124 +1,96 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
+pragma solidity ^0.8.26;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-/**
- * @title IWrapperToken
- * @notice Interface for ERC20 wrapper tokens that represent underlying assets in Culfira protocol
- * @dev Extends ERC20 with wrapper-specific functionality for vault interactions and yield farming
- */
+/// @title IWrapperToken - Interface for ERC20 wrapper tokens
+/// @notice Interface for wrapper tokens that restrict transfer when locked in vaults
 interface IWrapperToken is IERC20 {
-    // --- Events ---
-    event Wrapped(address indexed user, uint256 underlyingAmount, uint256 wrapperAmount);
-    event Unwrapped(address indexed user, uint256 wrapperAmount, uint256 underlyingAmount);
-    event VaultLocked(address indexed vault, address indexed user, uint256 amount);
-    event VaultUnlocked(address indexed vault, address indexed user, uint256 amount);
-    event YieldFarmingEnabled(address indexed user, uint256 amount);
-    event YieldFarmingDisabled(address indexed user, uint256 amount);
     
-    // --- Core Wrapper Functions ---
-    /**
-     * @notice Wrap underlying token to receive wrapper token
-     * @param amount Amount of underlying token to wrap
-     * @return wrapperAmount Amount of wrapper token minted
-     */
-    function wrap(uint256 amount) external returns (uint256 wrapperAmount);
+    // ============ Events ============
     
-    /**
-     * @notice Unwrap wrapper token to receive underlying token
-     * @param amount Amount of wrapper token to unwrap
-     * @return underlyingAmount Amount of underlying token returned
-     */
-    function unwrap(uint256 amount) external returns (uint256 underlyingAmount);
+    event Wrapped(address indexed user, uint256 amount);
+    event Unwrapped(address indexed user, uint256 amount);
+    event TokensLocked(address indexed user, address indexed vault, uint256 amount);
+    event TokensUnlocked(address indexed user, address indexed vault, uint256 amount);
+    event VaultAuthorized(address indexed vault);
+    event VaultRevoked(address indexed vault);
     
-    // --- Vault Management ---
-    /**
-     * @notice Lock wrapper tokens for vault participation (only registered vaults)
-     * @param user User whose tokens to lock
-     * @param amount Amount to lock
-     */
-    function lockForVault(address user, uint256 amount) external;
+    // ============ Errors ============
     
-    /**
-     * @notice Unlock wrapper tokens from vault participation
-     * @param user User whose tokens to unlock
-     * @param amount Amount to unlock
-     */
-    function unlockFromVault(address user, uint256 amount) external;
+    error InsufficientFreeBalance();
+    error UnauthorizedVault();
+    error InvalidAmount();
+    error TransferNotAllowed();
     
-    /**
-     * @notice Enable yield farming mode (restricts transfers but allows farming)
-     * @param user User to enable yield farming for
-     * @param amount Amount to enable for farming
-     */
-    function enableYieldFarming(address user, uint256 amount) external;
+    // ============ Core Wrapper Functions ============
     
-    /**
-     * @notice Disable yield farming mode
-     * @param user User to disable yield farming for
-     * @param amount Amount to disable from farming
-     */
-    function disableYieldFarming(address user, uint256 amount) external;
+    /// @notice Wrap underlying tokens to get wrapper tokens (legacy function for compatibility)
+    /// @param amount Amount of underlying tokens to wrap
+    function wrap(uint256 amount) external;
     
-    // --- Registry Functions ---
-    /**
-     * @notice Register/unregister a vault (only registry)
-     * @param vault Vault address
-     * @param status Registration status
-     */
-    function registerVault(address vault, bool status) external;
+    /// @notice Unwrap wrapper tokens to get underlying tokens (legacy function for compatibility)
+    /// @param amount Amount of wrapper tokens to unwrap
+    function unwrap(uint256 amount) external;
     
-    /**
-     * @notice Check if address is registered vault
-     * @param vault Address to check
-     * @return True if registered vault
-     */
-    function isVault(address vault) external view returns (bool);
+    /// @notice Withdraw wrapper tokens and get underlying tokens
+    /// @param account Account to withdraw to
+    /// @param amount Amount to withdraw
+    /// @return success True if withdrawal was successful
+    function withdrawTo(address account, uint256 amount) external returns (bool);
     
-    // --- View Functions ---
-    /**
-     * @notice Get underlying token address
-     * @return Address of underlying token
-     */
-    function underlyingToken() external view returns (address);
+    /// @notice Deposit underlying tokens for a specific account
+    /// @param account Account to deposit for
+    /// @param amount Amount to deposit
+    /// @return success True if deposit was successful
+    function depositFor(address account, uint256 amount) external returns (bool);
     
-    /**
-     * @notice Get user's locked balance for vaults
-     * @param user User address
-     * @return Locked balance
-     */
-    function vaultLockedBalance(address user) external view returns (uint256);
+    // ============ Vault Management Functions ============
     
-    /**
-     * @notice Get user's yield farming balance
-     * @param user User address
-     * @return Yield farming balance
-     */
-    function yieldFarmingBalance(address user) external view returns (uint256);
+    /// @notice Lock tokens for vault participation (only authorized vaults)
+    /// @param user User whose tokens to lock
+    /// @param amount Amount of tokens to lock
+    function lockTokens(address user, uint256 amount) external;
     
-    /**
-     * @notice Get user's freely transferable balance
-     * @param user User address
-     * @return Free balance (total - vault_locked - yield_farming)
-     */
-    function freeBalance(address user) external view returns (uint256);
+    /// @notice Unlock tokens from vault (only authorized vaults)
+    /// @param user User whose tokens to unlock
+    /// @param amount Amount of tokens to unlock
+    function unlockTokens(address user, uint256 amount) external;
     
-    /**
-     * @notice Get total wrapped supply
-     * @return Total supply of wrapper tokens
-     */
-    function totalWrapped() external view returns (uint256);
+    /// @notice Authorize a vault to lock/unlock tokens
+    /// @param vault Vault address to authorize
+    function authorizeVault(address vault) external;
     
-    /**
-     * @notice Get conversion rate from underlying to wrapper
-     * @return rate Exchange rate (underlying to wrapper)
-     */
-    function getWrapRate() external view returns (uint256 rate);
+    /// @notice Revoke vault authorization
+    /// @param vault Vault address to revoke
+    function revokeVault(address vault) external;
     
-    /**
-     * @notice Get conversion rate from wrapper to underlying
-     * @return rate Exchange rate (wrapper to underlying)
-     */
-    function getUnwrapRate() external view returns (uint256 rate);
+    // ============ View Functions ============
+    
+    /// @notice Get free (unlocked) balance of user
+    /// @param user User address
+    /// @return freeBalance Amount of free tokens
+    function freeBalanceOf(address user) external view returns (uint256);
+    
+    /// @notice Get locked balance in specific vault
+    /// @param user User address
+    /// @param vault Vault address
+    /// @return lockedAmount Amount of tokens locked in vault
+    function getLockedBalance(address user, address vault) external view returns (uint256);
+    
+    /// @notice Check if vault is authorized
+    /// @param vault Vault address to check
+    /// @return authorized True if vault is authorized
+    function authorizedVaults(address vault) external view returns (bool);
+    
+    /// @notice Get total locked amount for user
+    /// @param user User address
+    /// @return totalLocked Total amount of locked tokens
+    function totalLocked(address user) external view returns (uint256);
+    
+    /// @notice Get locked balances for user in specific vault
+    /// @param user User address
+    /// @param vault Vault address
+    /// @return lockedAmount Amount locked in vault
+    function lockedBalances(address user, address vault) external view returns (uint256);
 }

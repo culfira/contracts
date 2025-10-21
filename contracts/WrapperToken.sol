@@ -4,10 +4,11 @@ pragma solidity ^0.8.26;
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Wrapper.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "./interfaces/IWrapperToken.sol";
 
 /// @title WrapperToken - ERC20 wrapper for underlying tokens
 /// @notice Wrapper token that restricts transfer when locked in vaults
-contract WrapperToken is ERC20Wrapper, Ownable, ReentrancyGuard {
+contract WrapperToken is ERC20Wrapper, Ownable, ReentrancyGuard, IWrapperToken {
     
     // ============ State Variables ============
     
@@ -19,22 +20,6 @@ contract WrapperToken is ERC20Wrapper, Ownable, ReentrancyGuard {
     
     /// @dev Total locked amount per user
     mapping(address => uint256) public totalLocked;
-    
-    // ============ Events ============
-    
-    event Wrapped(address indexed user, uint256 amount);
-    event Unwrapped(address indexed user, uint256 amount);
-    event TokensLocked(address indexed user, address indexed vault, uint256 amount);
-    event TokensUnlocked(address indexed user, address indexed vault, uint256 amount);
-    event VaultAuthorized(address indexed vault);
-    event VaultRevoked(address indexed vault);
-    
-    // ============ Errors ============
-    
-    error InsufficientFreeBalance();
-    error UnauthorizedVault();
-    error InvalidAmount();
-    error TransferNotAllowed();
     
     // ============ Constructor ============
     
@@ -65,11 +50,16 @@ contract WrapperToken is ERC20Wrapper, Ownable, ReentrancyGuard {
     }
     
     /// @notice Override withdrawTo to check locked balances
-    function withdrawTo(address account, uint256 amount) public override returns (bool) {
+    function withdrawTo(address account, uint256 amount) public override(ERC20Wrapper, IWrapperToken) returns (bool) {
         uint256 freeBalance = balanceOf(_msgSender()) - totalLocked[_msgSender()];
         if (freeBalance < amount) revert InsufficientFreeBalance();
         
         return super.withdrawTo(account, amount);
+    }
+    
+    /// @notice Override depositFor to maintain interface compatibility
+    function depositFor(address account, uint256 amount) public override(ERC20Wrapper, IWrapperToken) returns (bool) {
+        return super.depositFor(account, amount);
     }
     
     /// @notice Lock tokens for vault participation (only authorized vaults)
@@ -77,8 +67,10 @@ contract WrapperToken is ERC20Wrapper, Ownable, ReentrancyGuard {
         if (!authorizedVaults[msg.sender]) revert UnauthorizedVault();
         if (amount == 0) revert InvalidAmount();
         
-        uint256 freeBalance = balanceOf(user) - totalLocked[user];
-        if (freeBalance < amount) revert InsufficientFreeBalance();
+        // Check if user has enough total balance (not just free balance)
+        if (balanceOf(user) < totalLocked[user] + amount) {
+            revert InsufficientFreeBalance();
+        }
         
         lockedBalances[user][msg.sender] += amount;
         totalLocked[user] += amount;

@@ -5,42 +5,10 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "./WrapperToken.sol";
 import "./libraries/WeightedPoolLib.sol";
+import "./interfaces/IMultiAssetVault.sol";
 
 /// @title MultiAssetVault - Multi-asset stokvel vault with weighted pools
-contract MultiAssetVault is ReentrancyGuard, Ownable {
-    
-    // ============ Structs ============
-    
-    struct PoolAsset {
-        address wrapperToken;
-        uint256 weight;          // Weight in basis points (10000 = 100%)
-        uint256 initialAmount;   // Amount at round start
-        uint256 currentAmount;   // Current amount
-    }
-    
-    struct Member {
-        uint256 depositedAmounts;  // Total value deposited
-        uint256 position;
-        uint256 joinedRound;
-        uint256 score;            // Performance score (10000 = 100%)
-        bool hasReceivedPayout;
-        bool isActive;
-    }
-    
-    struct Round {
-        uint256 id;
-        uint256 startTime;
-        uint256 endTime;
-        address winner;
-        PoolAsset[] poolAssets;
-        RoundState state;
-    }
-    
-    enum RoundState {
-        DEPOSIT,
-        ACTIVE,
-        COMPLETED
-    }
+contract MultiAssetVault is ReentrancyGuard, Ownable, IMultiAssetVault {
     
     // ============ State Variables ============
     
@@ -63,43 +31,30 @@ contract MultiAssetVault is ReentrancyGuard, Ownable {
     
     // ============ Constants ============
     
-    uint256 public constant ROUND_DURATION = 30 days;
+    uint256 public immutable ROUND_DURATION;
     uint256 public constant SCORE_PRECISION = 10000;
     uint256 public constant HEALTH_FACTOR_THRESHOLD = 9500; // 95%
     uint256 public constant PENALTY_RATE = 2000; // 20%
     
-    // ============ Events ============
-    
-    event MemberJoined(address indexed user, uint256 position);
-    event RoundStarted(uint256 indexed roundId, address indexed winner);
-    event RoundCompleted(uint256 indexed roundId);
-    event AssetDeposited(address indexed user, address indexed wrapper, uint256 amount);
-    event WinnerClaimed(address indexed winner, uint256 roundId);
-    event HealthFactorViolation(address indexed user, uint256 deficit);
-    event InsuranceDistributed(address indexed user, uint256 amount);
-    event WrapperRegistered(address indexed wrapper);
-    
-    // ============ Errors ============
-    
-    error InvalidAmount();
-    error NotMember();
-    error AlreadyMember();
-    error NotWinner();
-    error RoundNotActive();
-    error InvalidAssetRatio();
-    error InsufficientBalance();
-    error HealthFactorTooLow();
-    error UnauthorizedVault();
-    
     // ============ Constructor ============
     
-    constructor() Ownable(msg.sender) {
+    constructor(uint256 roundDuration) Ownable(msg.sender) {
+        require(roundDuration > 0, "Invalid round duration");
+        ROUND_DURATION = roundDuration;
         currentRoundId = 1;
+    }
+    
+    // ============ Modifiers ============
+    
+    modifier onlyActiveMembers() {
+        require(members[msg.sender].isActive, "Not active member");
+        _;
     }
     
     // ============ Admin Functions ============
     
-    /// @notice Register a wrapper token for use in vault
+    /// @notice Register a wrapper token for use in vault (now requires owner for initial setup)
+    /// @dev In production, this could be changed to voting mechanism
     function registerWrapper(address wrapper) external onlyOwner {
         if (!isWrapperRegistered[wrapper]) {
             registeredWrappers.push(wrapper);
@@ -136,13 +91,13 @@ contract MultiAssetVault is ReentrancyGuard, Ownable {
         
         uint256 totalValue = 0;
         
-        // Deposit assets and lock in wrappers
+        // Deposit assets to vault 
         for (uint256 i = 0; i < wrappers.length; i++) {
             if (!isWrapperRegistered[wrappers[i]]) revert InvalidAmount();
             
             WrapperToken wrapper = WrapperToken(wrappers[i]);
+            // Transfer wrapper tokens to vault
             wrapper.transferFrom(msg.sender, address(this), amounts[i]);
-            wrapper.lockTokens(msg.sender, amounts[i]);
             
             memberDeposits[msg.sender][i] = amounts[i];
             
@@ -170,11 +125,11 @@ contract MultiAssetVault is ReentrancyGuard, Ownable {
     
     // ============ Round Management ============
     
-    /// @notice Start a new round with pool assets
+    /// @notice Start a new round with pool assets (any active member can start)
     function startRound(
         address[] calldata wrappers,
         uint256[] calldata weights
-    ) external onlyOwner {
+    ) external onlyActiveMembers {
         if (currentRoundId > 1) {
             if (rounds[currentRoundId - 1].state != RoundState.COMPLETED) {
                 revert RoundNotActive();
@@ -214,14 +169,18 @@ contract MultiAssetVault is ReentrancyGuard, Ownable {
         if (round.winner != msg.sender) revert NotWinner();
         if (members[msg.sender].hasReceivedPayout) revert AlreadyMember();
         
-        // Transfer ALL pool assets to winner's wallet
+        // Transfer ALL pool assets to winner's wallet and lock them immediately
         for (uint256 i = 0; i < round.poolAssets.length; i++) {
             PoolAsset storage asset = round.poolAssets[i];
             WrapperToken wrapperToken = WrapperToken(asset.wrapperToken);
             
-            // Transfer all pool assets to winner
             if (asset.currentAmount > 0) {
+                // Step 1: Transfer assets to winner
                 wrapperToken.transfer(msg.sender, asset.currentAmount);
+                
+                // Step 2: Lock transferred assets immediately
+                // Winner can transfer for yield farming but cannot unwrap
+                wrapperToken.lockTokens(msg.sender, asset.currentAmount);
             }
         }
         
@@ -232,12 +191,17 @@ contract MultiAssetVault is ReentrancyGuard, Ownable {
     
 
     
-    /// @notice Complete round - winner must return assets for health check
-    function completeRound() external onlyOwner {
+    /// @notice Complete round - winner can complete anytime, others after endTime
+    function completeRound() external {
         Round storage round = rounds[currentRoundId];
         
         if (round.state != RoundState.ACTIVE) revert RoundNotActive();
-        if (block.timestamp < round.endTime) revert RoundNotActive();
+        
+        // Winner can complete anytime, others only after endTime
+        if (msg.sender != round.winner) {
+            if (block.timestamp < round.endTime) revert RoundNotActive();
+            require(members[msg.sender].isActive, "Not active member");
+        }
         
         // Calculate health factors based on winner's wallet balance
         _calculateHealthFactors(currentRoundId);
@@ -250,7 +214,13 @@ contract MultiAssetVault is ReentrancyGuard, Ownable {
             
             uint256 winnerBalance = wrapperToken.balanceOf(winner);
             if (winnerBalance > 0) {
-                // Transfer remaining assets back to vault for next round
+                // Step 1: Unlock tokens before transfer back
+                uint256 lockedAmount = wrapperToken.getLockedBalance(winner, address(this));
+                if (lockedAmount > 0) {
+                    wrapperToken.unlockTokens(winner, lockedAmount);
+                }
+                
+                // Step 2: Transfer remaining assets back to vault for next round
                 wrapperToken.transferFrom(winner, address(this), winnerBalance);
             }
         }
@@ -328,8 +298,8 @@ contract MultiAssetVault is ReentrancyGuard, Ownable {
         }
     }
     
-    /// @notice Distribute insurance pool at end of cycle
-    function distributeInsurance() external onlyOwner {
+    /// @notice Distribute insurance pool at end of cycle (any active member can trigger)
+    function distributeInsurance() external onlyActiveMembers {
         uint256 totalScore;
         for (uint256 i = 0; i < memberList.length; i++) {
             if (members[memberList[i]].isActive) {

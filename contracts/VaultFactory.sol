@@ -5,10 +5,11 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "./MultiAssetVault.sol";
 import "./WrapperRegistry.sol";
 import "./InsuranceManager.sol";
+import "./interfaces/IVaultFactory.sol";
 
 /// @title VaultFactory - Factory for creating MultiAssetVaults
 /// @notice Manages creation and registration of vaults
-contract VaultFactory is Ownable {
+contract VaultFactory is Ownable, IVaultFactory {
     
     // ============ State Variables ============
     
@@ -18,25 +19,6 @@ contract VaultFactory is Ownable {
     address[] public vaults;
     mapping(address => bool) public isVault;
     mapping(address => VaultMetadata) public vaultMetadata;
-    
-    // ============ Structs ============
-    
-    struct VaultMetadata {
-        string name;
-        string description;
-        address creator;
-        uint256 createdAt;
-        bool isActive;
-    }
-    
-    // ============ Events ============
-    
-    event VaultCreated(
-        address indexed vault,
-        address indexed creator,
-        string name
-    );
-    event VaultDeactivated(address indexed vault);
     
     // ============ Constructor ============
     
@@ -51,11 +33,18 @@ contract VaultFactory is Ownable {
     // ============ Functions ============
     
     /// @notice Create a new MultiAssetVault
+    /// @param name Name of the vault
+    /// @param description Description of the vault
+    /// @param cycleTime Duration of each round in seconds (minimum 1 day)
     function createVault(
         string memory name,
-        string memory description
+        string memory description,
+        uint256 cycleTime
     ) external returns (address) {
-        MultiAssetVault vault = new MultiAssetVault();
+        require(cycleTime >= 1 days, "Cycle time too short");
+        require(cycleTime <= 365 days, "Cycle time too long");
+        
+        MultiAssetVault vault = new MultiAssetVault(cycleTime);
         
         address vaultAddress = address(vault);
         vaults.push(vaultAddress);
@@ -66,16 +55,17 @@ contract VaultFactory is Ownable {
             description: description,
             creator: msg.sender,
             createdAt: block.timestamp,
+            cycleTime: cycleTime,
             isActive: true
         });
         
-        // Register vault in insurance manager
-        insuranceManager.registerVault(vaultAddress);
+        // Register vault in insurance manager (if we own it)
+        // insuranceManager.registerVault(vaultAddress);
         
         // Transfer ownership to creator
         vault.transferOwnership(msg.sender);
         
-        emit VaultCreated(vaultAddress, msg.sender, name);
+        emit VaultCreated(vaultAddress, msg.sender, name, cycleTime);
         
         return vaultAddress;
     }
@@ -95,6 +85,12 @@ contract VaultFactory is Ownable {
     /// @notice Get vault count
     function getVaultCount() external view returns (uint256) {
         return vaults.length;
+    }
+    
+    /// @notice Get vault cycle time
+    function getVaultCycleTime(address vault) external view returns (uint256) {
+        require(isVault[vault], "Not a vault");
+        return vaultMetadata[vault].cycleTime;
     }
     
     /// @notice Get active vaults
