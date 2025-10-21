@@ -2,9 +2,10 @@
 pragma solidity ^0.8.26;
 
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Wrapper.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 import "./interfaces/IWrapperToken.sol";
+import "./interfaces/IProtocolRegistry.sol";
 
 /// @title WrapperToken - ERC20 wrapper for underlying tokens
 /// @notice Wrapper token that restricts transfer when locked in vaults
@@ -21,6 +22,9 @@ contract WrapperToken is ERC20Wrapper, Ownable, ReentrancyGuard, IWrapperToken {
     /// @dev Total locked amount per user
     mapping(address => uint256) public totalLocked;
     
+    /// @dev Protocol registry for auto-authorization
+    IProtocolRegistry public protocolRegistry;
+    
     // ============ Constructor ============
     
     constructor(
@@ -28,6 +32,23 @@ contract WrapperToken is ERC20Wrapper, Ownable, ReentrancyGuard, IWrapperToken {
         string memory name_,
         string memory symbol_
     ) ERC20(name_, symbol_) ERC20Wrapper(underlyingToken_) Ownable(msg.sender) {}
+    
+    /// @notice Set protocol registry and auto-authorize existing protocols
+    /// @param registry Address of the protocol registry
+    function setProtocolRegistry(address registry) external onlyOwner {
+        protocolRegistry = IProtocolRegistry(registry);
+        if (registry != address(0)) {
+            _autoAuthorizeProtocols();
+        }
+        emit ProtocolRegistrySet(registry);
+    }
+    
+    /// @notice Manually sync with protocol registry (refresh authorizations)
+    function syncWithProtocolRegistry() external onlyOwner {
+        require(address(protocolRegistry) != address(0), "Protocol registry not set");
+        _autoAuthorizeProtocols();
+        emit ProtocolsSynced();
+    }
     
     // ============ External Functions ============
     
@@ -64,7 +85,16 @@ contract WrapperToken is ERC20Wrapper, Ownable, ReentrancyGuard, IWrapperToken {
     
     /// @notice Lock tokens for vault participation (only authorized vaults)
     function lockTokens(address user, uint256 amount) external {
-        if (!authorizedVaults[msg.sender]) revert UnauthorizedVault();
+        // Check manual authorization first
+        if (!authorizedVaults[msg.sender]) {
+            // Check protocol registry as fallback
+            require(
+                address(protocolRegistry) != address(0) && 
+                protocolRegistry.isAuthorizedProtocol(msg.sender),
+                "Unauthorized vault"
+            );
+        }
+        
         if (amount == 0) revert InvalidAmount();
         
         // Check if user has enough total balance (not just free balance)
@@ -80,7 +110,16 @@ contract WrapperToken is ERC20Wrapper, Ownable, ReentrancyGuard, IWrapperToken {
     
     /// @notice Unlock tokens from vault (only authorized vaults)
     function unlockTokens(address user, uint256 amount) external {
-        if (!authorizedVaults[msg.sender]) revert UnauthorizedVault();
+        // Check manual authorization first
+        if (!authorizedVaults[msg.sender]) {
+            // Check protocol registry as fallback
+            require(
+                address(protocolRegistry) != address(0) && 
+                protocolRegistry.isAuthorizedProtocol(msg.sender),
+                "Unauthorized vault"
+            );
+        }
+        
         if (amount == 0) revert InvalidAmount();
         
         if (lockedBalances[user][msg.sender] < amount) revert InvalidAmount();
@@ -113,6 +152,21 @@ contract WrapperToken is ERC20Wrapper, Ownable, ReentrancyGuard, IWrapperToken {
     /// @notice Get locked balance in specific vault
     function getLockedBalance(address user, address vault) external view returns (uint256) {
         return lockedBalances[user][vault];
+    }
+    
+    // ============ Internal Functions ============
+    
+    /// @dev Auto-authorize all protocols from registry
+    function _autoAuthorizeProtocols() internal {
+        if (address(protocolRegistry) == address(0)) return;
+        
+        address[] memory protocols = protocolRegistry.getAllAuthorizedProtocols();
+        for (uint256 i = 0; i < protocols.length; i++) {
+            if (!authorizedVaults[protocols[i]]) {
+                authorizedVaults[protocols[i]] = true;
+                emit VaultAuthorized(protocols[i]);
+            }
+        }
     }
     
     // ============ Internal Functions ============

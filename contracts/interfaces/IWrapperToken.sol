@@ -15,6 +15,8 @@ interface IWrapperToken is IERC20 {
     event TokensUnlocked(address indexed user, address indexed vault, uint256 amount);
     event VaultAuthorized(address indexed vault);
     event VaultRevoked(address indexed vault);
+    event ProtocolRegistrySet(address indexed registry);
+    event ProtocolsSynced();
     
     // ============ Errors ============
     
@@ -58,12 +60,19 @@ interface IWrapperToken is IERC20 {
     function unlockTokens(address user, uint256 amount) external;
     
     /// @notice Authorize a vault to lock/unlock tokens
-    /// @param vault Vault address to authorize
+    /// @param vault The vault address to authorize
     function authorizeVault(address vault) external;
     
     /// @notice Revoke vault authorization
-    /// @param vault Vault address to revoke
+    /// @param vault The vault address to revoke
     function revokeVault(address vault) external;
+    
+    /// @notice Set protocol registry for auto-authorization
+    /// @param registry Address of the protocol registry
+    function setProtocolRegistry(address registry) external;
+    
+    /// @notice Sync with protocol registry (refresh authorizations)
+    function syncWithProtocolRegistry() external;
     
     // ============ View Functions ============
     
