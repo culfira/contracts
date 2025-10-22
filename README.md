@@ -1,92 +1,124 @@
-# Contracts
+# Culfira Multi-Asset Vault Protocol
 
-## Testing with viem and Hardhat Ignition
+## Abstract
 
-This repo uses `@nomicfoundation/hardhat-toolbox-viem` and Hardhat Ignition for deploying contracts in tests.
+Culfira is a decentralized stokvel protocol built on Hedera that enables community-based asset pooling and yield farming through multi-asset weighted pools. The protocol uses wrapper tokens to prevent rug pulls while allowing sophisticated DeFi yield strategies, combining traditional stokvel mechanics with modern DeFi primitives.
 
-What's included:
+## Core Architecture
 
-- Ignition modules in `ignition/modules/`:
-  - `CulfiraTokenModule.ts` — deploys `CulfiraToken` with a `treasury` parameter
-  - `CulfiraManagerModule.ts` — deploys `CulfiraManager` with `token` and `treasury`
-  - `VaultStokvelModule.ts` — deploys `VaultStokvel` with `token` and `manager`
-- A reusable test fixture `test/fixtures.ts` exporting `deployCulfiraWithIgnition(viem, ignition)` that deploys the stack and returns viem-style contract instances.
+### Wrapper Token System
 
-Example usage in a test:
+The protocol operates on a foundation of ERC20 wrapper tokens that encapsulate underlying assets:
 
-```ts
-import { network } from "hardhat";
-import { deployCulfiraWithIgnition } from "./fixtures.js";
+- **Asset Wrapping**: Users deposit underlying tokens (HBAR, USDC, ETH) to receive wrapper tokens (xHBAR, xUSDC, xETH)
+- **Rug Pull Prevention**: Wrapper tokens implement transfer restrictions when locked in vaults
+- **Yield Farming Gateway**: Locked tokens can be transferred for yield farming but cannot be unwrapped to underlying assets
+- **Protocol Registry**: Centralized authorization system for DeFi protocols to interact with wrapper tokens
 
-const { viem, ignition } = await network.connect();
-const { token, manager, vault, accounts } = await deployCulfiraWithIgnition(viem, ignition);
+### Multi-Asset Vault Architecture
+
+Each vault operates as an autonomous stokvel community with the following properties:
+
+- **Member Management**: Users join vaults by depositing multiple wrapper tokens with specified weights
+- **Round-Based Distribution**: Sequential rounds where one member becomes the "winner" and receives all pool assets
+- **Multi-Asset Pools**: Pools contain multiple wrapper tokens with Balancer-style weighted compositions
+- **Decentralized Operations**: Members can initiate rounds and complete them without centralized control
+
+### Weighted Pool Mathematics
+
+The protocol implements Balancer-inspired weighted pool mechanics:
+
+- **Weight Validation**: Asset weights must sum to 100% (10,000 basis points)
+- **Pool Composition**: Each pool maintains target ratios between different wrapper tokens
+- **Health Factor Calculation**: Continuous monitoring of pool composition deviations
+- **Rebalancing Incentives**: Penalties for maintaining unhealthy pool ratios
+
+## Health Factor & Risk Management
+
+### Health Factor Definition
+
+The health factor represents the minimum deviation ratio of any asset in the pool:
+
+```
+Health Factor = min(current_balance_i / initial_balance_i * weight_i) for all assets i
 ```
 
-Run tests:
+### Penalty Mechanism
 
-```bash
-npx hardhat test
-```
+- **Threshold**: Health factor must remain ≥ 95%
+- **Violation Response**: Assets falling below threshold trigger penalty calculations
+- **Insurance Pool**: Penalty amounts are transferred to insurance pools for distribution
+- **Score Reduction**: Member scores decrease proportionally to health factor violations
 
-Notes:
+### Insurance Distribution
 
-- This project uses ESM with `moduleResolution: node16`, so local imports in tests should include the `.js` extension.
-- Tests use viem’s public and wallet clients made available by Hardhat’s viem plugin.
+- **Accumulation**: Penalties accumulate in insurance pools throughout vault cycles
+- **Distribution**: At cycle end, insurance pools distribute proportionally to member scores
+- **Incentive Alignment**: Higher scores (better health factor maintenance) receive larger insurance shares
 
-## Sample Hardhat 3 Beta Project (`node:test` and `viem`)
+## Protocol Integration Framework
 
-This project showcases a Hardhat 3 Beta project using the native Node.js test runner (`node:test`) and the `viem` library for Ethereum interactions.
+### Authorization Layers
 
-To learn more about the Hardhat 3 Beta, please visit the [Getting Started guide](https://hardhat.org/docs/getting-started#getting-started-with-hardhat-3). To share your feedback, join our [Hardhat 3 Beta](https://hardhat.org/hardhat3-beta-telegram-group) Telegram group or [open an issue](https://github.com/NomicFoundation/hardhat/issues/new) in our GitHub issue tracker.
+1. **Manual Vault Authorization**: Direct owner-controlled vault permissions
+2. **Protocol Registry**: Centralized registry of approved DeFi protocols
+3. **Auto-Authorization**: Automatic permission granting for registered protocols
 
-## Project Overview
+### DeFi Protocol Categories
 
-This example project includes:
+- **DEX**: Decentralized exchanges (SaucerSwap, Uniswap-style)
+- **Lending**: Lending protocols (Compound, Aave-style)
+- **Staking**: Native and liquid staking protocols
+- **Yield Farming**: Specialized yield farming protocols
+- **Liquidity Mining**: Liquidity provision incentive programs
 
-- A simple Hardhat configuration file.
-- Foundry-compatible Solidity unit tests.
-- TypeScript integration tests using [`node:test`](nodejs.org/api/test.html), the new Node.js native test runner, and [`viem`](https://viem.sh/).
-- Examples demonstrating how to connect to different types of networks, including locally simulating OP mainnet.
+### Wrapper Token Constraints
 
-## Usage
+Winner users receiving pool assets can:
 
-### Running Tests
+- Transfer wrapper tokens to authorized protocols for yield farming
+- Participate in liquidity pools and lending markets
+- Stake in various protocols
 
-To run all the tests in the project, execute the following command:
+Winner users cannot:
 
-```shell
-npx hardhat test
-```
+- Unwrap tokens to underlying assets (preventing rug pulls)
+- Transfer beyond free balance limits
+- Withdraw from vault obligations
 
-You can also selectively run the Solidity or `node:test` tests:
+## Round Lifecycle
 
-```shell
-npx hardhat test solidity
-npx hardhat test nodejs
-```
+1. **Initialization**: Vault created with custom cycle duration (1-365 days)
+2. **Member Onboarding**: Users deposit multi-asset wrapper tokens with weights
+3. **Round Activation**: Any active member can initiate new rounds
+4. **Asset Distribution**: Winner claims all pool assets to their wallet (locked state)
+5. **Yield Farming Period**: Winner deploys assets across approved DeFi protocols
+6. **Health Monitoring**: Continuous health factor tracking and penalty calculation
+7. **Round Completion**: Winner or members complete round after cycle duration
+8. **Asset Recovery**: All assets returned to vault for next round
+9. **Insurance Distribution**: Accumulated penalties distributed based on member scores
 
-### Make a deployment to Sepolia
+## Security Model
 
-This project includes an example Ignition module to deploy the contract. You can deploy this module to a locally simulated chain or to Sepolia.
+- **Immutable Locks**: Wrapper tokens cannot be unwrapped when locked in vaults
+- **Health Factor Enforcement**: Automatic penalty system for pool composition violations
+- **Protocol Whitelisting**: Only approved protocols can interact with locked tokens
+- **Decentralized Governance**: Members control round timing and operations
+- **Emergency Safeguards**: Owner oversight for critical vault operations
 
-To run the deployment to a local chain:
+## Economic Incentives
 
-```shell
-npx hardhat ignition deploy ignition/modules/Counter.ts
-```
+### Member Scoring System
 
-To run the deployment to Sepolia, you need an account with funds to send the transaction. The provided Hardhat configuration includes a Configuration Variable called `SEPOLIA_PRIVATE_KEY`, which you can use to set the private key of the account you want to use.
+- **Base Score**: 100% (10,000 basis points) for healthy pool maintenance
+- **Penalty Reduction**: Score decreases proportional to health factor violations
+- **Insurance Rewards**: Higher scores receive larger insurance pool distributions
 
-You can set the `SEPOLIA_PRIVATE_KEY` variable using the `hardhat-keystore` plugin or by setting it as an environment variable.
+### Yield Optimization
 
-To set the `SEPOLIA_PRIVATE_KEY` config variable using `hardhat-keystore`:
+- **Capital Efficiency**: Winners deploy entire pool capital for maximum yield
+- **Risk Diversification**: Multi-asset pools spread risk across different tokens
+- **Protocol Flexibility**: Integration with multiple DeFi protocols for yield strategies
+- **Penalty Mitigation**: Insurance pools compensate for individual poor performance
 
-```shell
-npx hardhat keystore set SEPOLIA_PRIVATE_KEY
-```
-
-After setting the variable, you can run the deployment with the Sepolia network:
-
-```shell
-npx hardhat ignition deploy --network sepolia ignition/modules/Counter.ts
-```
+This protocol design creates a sustainable, community-driven investment vehicle that combines the social aspects of traditional stokvels with the capital efficiency and yield opportunities of modern DeFi, while maintaining strong safeguards against malicious behavior.

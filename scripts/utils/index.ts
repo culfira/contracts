@@ -1,5 +1,5 @@
-import fs from "fs";
-import path from "path";
+import * as fs from "fs";
+import * as path from "path";
 
 export function writeEnv(vars: Record<string, string>) {
   // In ESM, __dirname is not defined. Use process.cwd() (project root when run via Hardhat).

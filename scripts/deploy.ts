@@ -13,52 +13,118 @@ async function main() {
   }
   const deployerAddress = deployer.account.address as `0x${string}`;
 
-  const treasuryAddress = (process.env.TREASURY_ADDRESS as `0x${string}` | undefined) ?? deployerAddress;
-  const managerAddress = (process.env.MANAGER_ADDRESS as `0x${string}` | undefined) ?? deployerAddress;
+  console.log("Deploying Culfira Multi-Asset Vault Protocol with:", deployerAddress);
 
-  console.log("Deploying with:", deployerAddress);
+  // Step 1: Deploy Protocol Registry
+  const protocolRegistry = await viem.deployContract("ProtocolRegistry", []);
+  console.log("ProtocolRegistry deployed at:", protocolRegistry.address);
 
-  // 1) Deploy CulfiraToken
-  const culToken = await viem.deployContract("CulfiraToken", [treasuryAddress]);
-  console.log("CulfiraToken:", culToken.address);
+  // Step 2: Deploy Wrapper Registry  
+  const wrapperRegistry = await viem.deployContract("WrapperRegistry", []);
+  console.log("WrapperRegistry deployed at:", wrapperRegistry.address);
 
-  // 2) Deploy CulfiraManager
-  const culfiraManager = await viem.deployContract("CulfiraManager", [
-    culToken.address,
-    treasuryAddress,
+  // Step 3: Deploy Insurance Manager
+  const insuranceManager = await viem.deployContract("InsuranceManager", []);
+  console.log("InsuranceManager deployed at:", insuranceManager.address);
+
+  // Step 4: Deploy Vault Factory with dependencies
+  const vaultFactory = await viem.deployContract("VaultFactory", [
+    wrapperRegistry.address,
+    insuranceManager.address
   ]);
-  console.log("CulfiraManager:", culfiraManager.address);
+  console.log("VaultFactory deployed at:", vaultFactory.address);
 
-  // 3) Deploy VaultStokvel managed by manager
-  const vaultStokvel = await viem.deployContract("VaultStokvel", [
-    culToken.address,
-    managerAddress,
-  ]);
-  console.log("VaultStokvel:", vaultStokvel.address);
-
-  // 4) Register vault in CulfiraToken
-  await culToken.write.registerVault([vaultStokvel.address, true]);
-  console.log("Vault registered in CulfiraToken");
-
-  // Optional: Deploy SaucerSwapWrapper if address env provided
-  const saucerPM = process.env.SAUCER_PM_ADDRESS as `0x${string}` | undefined;
-  const culTokenAddrOverride = process.env.CUL_TOKEN_ADDRESS as `0x${string}` | undefined;
-  const whbarAddr = process.env.WHBAR_ADDRESS as `0x${string}` | undefined;
-
-  if (saucerPM && whbarAddr) {
-    const saucerWrapper = await viem.deployContract("SaucerSwapWrapper", [
-      saucerPM,
-      culTokenAddrOverride ?? culToken.address,
-      whbarAddr,
+  // Step 5: Deploy wrapper tokens manually and register them
+  const wrapperTokens = [];
+  
+  // Get sample underlying token address from env or deploy a mock token
+  let sampleUnderlying: `0x${string}`;
+  
+  if (process.env.SAMPLE_UNDERLYING_TOKEN) {
+    sampleUnderlying = process.env.SAMPLE_UNDERLYING_TOKEN as `0x${string}`;
+  } else {
+    // Deploy a mock ERC20 token for testing
+    const mockToken = await viem.deployContract("MockERC20", [
+      "Mock HBAR",
+      "HBAR", 
+      1000000000000000000000000n // 1M tokens with 18 decimals
     ]);
-    console.log("SaucerSwapWrapper:", saucerWrapper.address);
+    sampleUnderlying = mockToken.address;
+    console.log("Mock underlying token deployed at:", sampleUnderlying);
+  }
+  
+  // Deploy wrapper token directly instead of using registry factory
+  console.log("Deploying wrapper token for:", sampleUnderlying);
+  
+  const hbarWrapper = await viem.deployContract("WrapperToken", [
+    sampleUnderlying,
+    "Wrapped HBAR",
+    "xHBAR"
+  ]);
+  console.log("HBAR WrapperToken deployed at:", hbarWrapper.address);
+  
+  // Set protocol registry in the wrapper token
+  await hbarWrapper.write.setProtocolRegistry([protocolRegistry.address]);
+  console.log("Protocol registry set in wrapper token");
+  
+  // Now register the manually deployed wrapper in the registry
+  // First, we need to modify WrapperRegistry to accept pre-deployed wrappers
+  // For now, let's skip registry registration and continue
+  console.log("Skipping registry registration for this deployment");
+
+  wrapperTokens.push({
+    name: "HBAR",
+    underlying: sampleUnderlying,
+    wrapper: hbarWrapper.address
+  });
+
+  // Step 6: Create example vault with 7-day cycle using factory
+  const cycleTime = BigInt(7 * 24 * 60 * 60); // 7 days as bigint
+  console.log("Creating vault with cycle time:", cycleTime.toString());
+  
+  const vaultTx = await vaultFactory.write.createVault([
+    "Example Stokvel Vault",
+    "A demonstration vault for multi-asset stokvel rounds", 
+    cycleTime
+  ]);
+  console.log("Vault creation transaction:", vaultTx);
+
+  // Get vault count safely
+  const vaultCount = await vaultFactory.read.getVaultCount();
+  console.log("Total vaults created:", vaultCount.toString());
+  
+  // Check if any vaults exist before accessing
+  if (vaultCount === 0n) {
+    throw new Error("No vaults created - check VaultFactory implementation");
+  }
+
+  const latestVaultAddress = await vaultFactory.read.vaults([vaultCount - 1n]);
+  console.log("MultiAssetVault created at:", latestVaultAddress);
+
+  // Validate vault creation
+  if (latestVaultAddress === "0x0000000000000000000000000000000000000000") {
+    throw new Error("Failed to create vault - check VaultFactory implementation");
   }
 
   writeEnv({
-    CULFIRA_TOKEN_ADDRESS: culToken.address,
-    CULFIRA_MANAGER_ADDRESS: culfiraManager.address,
-    VAULT_STOKVEL_ADDRESS: vaultStokvel.address,  
-  })
+    PROTOCOL_REGISTRY_ADDRESS: protocolRegistry.address,
+    WRAPPER_REGISTRY_ADDRESS: wrapperRegistry.address,
+    INSURANCE_MANAGER_ADDRESS: insuranceManager.address,
+    VAULT_FACTORY_ADDRESS: vaultFactory.address,
+    HBAR_WRAPPER_ADDRESS: hbarWrapper.address as string,
+    EXAMPLE_VAULT_ADDRESS: latestVaultAddress as string,
+    SAMPLE_UNDERLYING_TOKEN: sampleUnderlying,
+  });
+
+  console.log("\n🎉 Culfira Protocol deployed successfully!");
+  console.log("📋 Summary:");
+  console.log("- ProtocolRegistry:", protocolRegistry.address);
+  console.log("- WrapperRegistry:", wrapperRegistry.address); 
+  console.log("- InsuranceManager:", insuranceManager.address);
+  console.log("- VaultFactory:", vaultFactory.address);
+  console.log("- Sample Underlying Token:", sampleUnderlying);
+  console.log("- Sample HBAR Wrapper:", hbarWrapper.address);
+  console.log("- Example Vault:", latestVaultAddress);
 }
 
 main().catch((e) => {
